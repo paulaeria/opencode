@@ -17,6 +17,7 @@ import { Config } from "@/config/config"
 import { Instance } from "@/project/instance"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
+import { Session } from "./index"
 import { Plugin } from "@/plugin"
 import { SystemPrompt } from "./system"
 import { Flag } from "@/flag/flag"
@@ -57,11 +58,12 @@ export namespace LLM {
       modelID: input.model.id,
       providerID: input.model.providerID,
     })
-    const [language, cfg, provider, auth] = await Promise.all([
+    const [language, cfg, provider, auth, session] = await Promise.all([
       Provider.getLanguage(input.model),
       Config.get(),
       Provider.getProvider(input.model.providerID),
       Auth.get(input.model.providerID),
+      Session.get(input.sessionID).catch(() => undefined),
     ])
     const isCodex = provider.id === "openai" && auth?.type === "oauth"
 
@@ -146,9 +148,23 @@ export namespace LLM {
     )
 
     const maxOutputTokens =
-      isCodex || provider.id.includes("github-copilot") ? undefined : ProviderTransform.maxOutputTokens(input.model)
+      isCodex || provider?.id.includes("github-copilot") ? undefined : ProviderTransform.maxOutputTokens(input.model)
 
     const tools = await resolveTools(input)
+
+    const copilotHeaders: Record<string, string> = {}
+    if (provider && (provider.id.includes("github-copilot") || input.model.providerID.includes("github-copilot"))) {
+      const { copilotInitiatorTracker } = await import("../provider/sdk/copilot/copilot-initiator-header")
+      if (session?.parentID) {
+        copilotInitiatorTracker.registerChildSession(input.sessionID, session.parentID)
+      }
+      
+      const initiator = copilotInitiatorTracker.getInitiator(
+        input.sessionID,
+        provider.options?.agentMessageResetThreshold
+      )
+      copilotHeaders["X-Initiator"] = initiator
+    }
 
     // LiteLLM and some Anthropic proxies require the tools parameter to be present
     // when message history contains tool calls, even if no tools are being used.
@@ -215,6 +231,7 @@ export namespace LLM {
         }),
         ...input.model.headers,
         ...headers,
+        ...copilotHeaders,
       },
       maxRetries: input.retries ?? 0,
       messages: [
