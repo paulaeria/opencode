@@ -29,13 +29,20 @@ export class CopilotInitiatorTracker {
 
   /**
    * Get the effective session ID for Copilot tracking.
-   * Returns the parent session ID if this is a registered child session.
+   * Returns the root session ID in the hierarchy if this is part of a session tree.
    *
    * @param sessionId - The session ID to resolve
-   * @returns The effective session ID (parent or self)
+   * @returns The effective root session ID
    */
   #getEffectiveSessionId(sessionId: string): string {
-    return this.#parentSessionMap.get(sessionId) ?? sessionId;
+    let current = sessionId;
+    const visited = new Set<string>();
+    while (this.#parentSessionMap.has(current)) {
+      if (visited.has(current)) break; // Cycle protection
+      visited.add(current);
+      current = this.#parentSessionMap.get(current)!;
+    }
+    return current;
   }
 
   /**
@@ -43,16 +50,18 @@ export class CopilotInitiatorTracker {
    *
    * @param sessionId - Session identifier
    * @param threshold - Threshold (defaults to 50)
+   * @param cleanupInterval - Cleanup interval (defaults to 24 hours)
    * @returns "user" for first call or after threshold, "agent" otherwise
    */
   getInitiator(
     sessionId: string,
     threshold: number = DEFAULT_THRESHOLD,
+    cleanupInterval: number = CLEANUP_INTERVAL_MS,
   ): "user" | "agent" {
     // Lazy cleanup of stale data
-    this.cleanup();
+    this.cleanup(false, cleanupInterval);
 
-    // Resolve to parent session for tracking if registered
+    // Resolve to root session for tracking
     const effectiveSessionId = this.#getEffectiveSessionId(sessionId);
 
     if (this.#firstCallMade.has(effectiveSessionId)) {
@@ -75,30 +84,25 @@ export class CopilotInitiatorTracker {
       return "agent";
     }
 
-    // Check if this is a child whose parent has made a direct call
-    // If so, add to #firstCallMade so subsequent calls continue parent's session
+    // Check if this session (or its root) has made a call in this tracker's lifetime
     if (sessionId !== effectiveSessionId && this.#directCalls.has(effectiveSessionId)) {
       this.#firstCallMade.add(effectiveSessionId);
       this.#sessionTimestamps.set(effectiveSessionId, Date.now());
-      this.#agentMessageCount.set(effectiveSessionId, 0);
-      // Continue with incrementing count (not a first call for the user)
-      const count = 1;
-      this.#agentMessageCount.set(effectiveSessionId, count);
+      this.#agentMessageCount.set(effectiveSessionId, 1);
       return "agent";
     }
 
-    // First call - initialize tracking with effective session ID
+    // First call for this hierarchy - initialize tracking with effective session ID
     this.#firstCallMade.add(effectiveSessionId);
     this.#sessionTimestamps.set(effectiveSessionId, Date.now());
     this.#agentMessageCount.set(effectiveSessionId, 0);
-    // Mark this session as having made a direct call
     this.#directCalls.add(effectiveSessionId);
     return "user";
   }
 
   /**
    * Reset all tracking for a session (called on /new, /reset, user model changes).
-   * Resets both the session and its effective (parent) session.
+   * Resets both the session and its effective (root) session.
    */
   reset(sessionId: string): void {
     const effectiveSessionId = this.#getEffectiveSessionId(sessionId);
@@ -109,25 +113,26 @@ export class CopilotInitiatorTracker {
   }
 
   /**
-   * Clean up stale session data (older than 24 hours).
+   * Clean up stale session data (older than cleanupInterval).
    * Also cleans up orphaned parent session mappings.
    */
-  cleanup(force = false): void {
+  cleanup(force = false, cleanupInterval: number = CLEANUP_INTERVAL_MS): void {
     const now = Date.now();
-    if (!force && now - this.#lastCleanup < CLEANUP_INTERVAL_MS) return;
+    if (!force && now - this.#lastCleanup < cleanupInterval) return;
     this.#lastCleanup = now;
 
-    // Clean up parent mappings for stale sessions
+    // Clean up parent mappings for stale roots
     for (const [child, parent] of this.#parentSessionMap) {
-      const timestamp = this.#sessionTimestamps.get(parent);
-      if (!timestamp || now - timestamp > CLEANUP_INTERVAL_MS) {
+      const root = this.#getEffectiveSessionId(parent);
+      const timestamp = this.#sessionTimestamps.get(root);
+      if (!timestamp || now - timestamp > cleanupInterval) {
         this.#parentSessionMap.delete(child);
       }
     }
 
     // Clean up stale session data
     for (const [sessionId, timestamp] of this.#sessionTimestamps) {
-      if (now - timestamp > CLEANUP_INTERVAL_MS) {
+      if (now - timestamp > cleanupInterval) {
         this.#firstCallMade.delete(sessionId);
         this.#sessionTimestamps.delete(sessionId);
         this.#agentMessageCount.delete(sessionId);

@@ -1026,6 +1026,22 @@ export namespace Config {
             .describe(
               "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
             ),
+          agentMessageResetThreshold: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe(
+              "Threshold for agent messages to auto-reset the X-Initiator header to 'user' for GitHub Copilot. Default is 50. Set to 0 to disable.",
+            ),
+          copilotInitiatorCleanupInterval: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              "Timeout in milliseconds for Copilot initiator tracking data. Inactive sessions are purged after this window. Default is 86400000 (24 hours).",
+            ),
         })
         .catchall(z.any())
         .optional(),

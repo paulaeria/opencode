@@ -18,6 +18,7 @@ import { Instance } from "@/project/instance"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
 import { Session } from "./index"
+import { SessionID } from "./schema"
 import { Plugin } from "@/plugin"
 import { SystemPrompt } from "./system"
 import { Flag } from "@/flag/flag"
@@ -63,7 +64,7 @@ export namespace LLM {
       Config.get(),
       Provider.getProvider(input.model.providerID),
       Auth.get(input.model.providerID),
-      Session.get(input.sessionID).catch(() => undefined),
+      Session.get(SessionID.make(input.sessionID)).catch(() => undefined),
     ])
     const isCodex = provider.id === "openai" && auth?.type === "oauth"
 
@@ -161,7 +162,8 @@ export namespace LLM {
       
       const initiator = copilotInitiatorTracker.getInitiator(
         input.sessionID,
-        provider.options?.agentMessageResetThreshold
+        provider.options?.agentMessageResetThreshold,
+        provider.options?.copilotInitiatorCleanupInterval
       )
       copilotHeaders["X-Initiator"] = initiator
     }
